@@ -1,0 +1,12 @@
+{
+  "encrypted": "02a52664161450c0bef1ceeb061478e3eae0974a1f44f2be623a1388cfc0db86018e632c2f887eff092810327f8fa1b8efc4c704507840b2fcf9ac68207cbb4a73bcb12765c9d154ac91ef6f3f6f07dfa73c4235ffbb7b99ca218af377304603d4e3a6a167ff423b6648e6a0f5a46c55b64be5ecbc9521a4b12d1f0ab645e5fa09ee7f88d643f3ef111b36038488c508c6eb1a28f25bd655b4a1cd69ecec272a0a5c9e0b48c26e535ab1feefd33057363a3a30e1fef73e1705478540a928",
+  "iv": "7c035f6db29baac2017c3372db4aeb95",
+  "authTag": "777dba94d691084c41cdcb64c74e6720",
+  "algorithm": "aes-256-gcm",
+  "timestamp": "2025-11-04T13:02:37.851Z",
+  "metadata": {
+    "system": "FA_STARX_BOT",
+    "created": "2025-11-04T13:02:37.848Z",
+    "githubValidated": true
+  }
+}

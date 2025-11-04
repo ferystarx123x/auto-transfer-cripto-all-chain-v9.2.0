@@ -1,0 +1,13 @@
+{
+  "name": "eth-auto-forward",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js"
+  },
+  "dependencies": {
+    "ethers": "^6.15.0",
+    "node-fetch": "^2.7.0",
+    "web3": "^4.16.0"
+  }
+}

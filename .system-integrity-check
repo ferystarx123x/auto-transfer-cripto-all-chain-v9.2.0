@@ -1,0 +1,12 @@
+{
+  "encrypted": "3c20a91b61e36c2aa53b7ca1e1aba2774b7400c371d21cfd20434830bd3c66e80d61ee57aa3c9a0a3b178792482fbab3416ff697fe6754400c52a2441b42d73e9a708d57fdaca4f6fa0bb3f9ccd56d3600b2c57e113ecce26e800e1b140a2308252221dbac3f689ba487bc3f6e28aaa07b7b85b57dd9604c71f4bd41570f8172fa54d59e238ea1ee0936914e2edf2902435fafad31e3d0d47b161ba3b438fca4536c35aeb90a4dbf346c2973dd574e9a50f7cb2fd0a4fe05cf36dc5344f8530473889d87c5f6cabbe24b34381e0dc636c8",
+  "iv": "829fde0b54338495b99dcd6e4c739995",
+  "authTag": "5d6ece065de14497d810eef2e4974848",
+  "algorithm": "aes-256-gcm",
+  "timestamp": "2025-11-04T12:39:31.278Z",
+  "metadata": {
+    "system": "FA_STARX_BOT_BACKUP",
+    "fileType": "ADMIN_PASSWORD_BACKUP",
+    "created": "2025-11-04T12:39:31.278Z"
+  }
+}
