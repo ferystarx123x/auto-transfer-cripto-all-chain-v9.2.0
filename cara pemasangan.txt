@@ -27,7 +27,7 @@ telegram : @fazuory77
 #start
 npm start or node main.js
 
-==}} Berikut adalah rangkuman semua fitur utama dari bot tersebut, tanpa penjelasan rinci:
+==}} Berikut adalah rangkuman semua fitur utama dari bot tersebut :
 
 Bot Transfer Kripto Multi-Rantai (Multi-Chain Transfer Bot v9.2)
 
