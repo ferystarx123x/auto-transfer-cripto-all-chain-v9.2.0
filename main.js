@@ -1,9 +1,107 @@
+// ===== NEW DEPENDENCIES =====
 const { ethers } = require('ethers');
 const readline = require('readline');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const https = require('https'); // Diperlukan untuk GitHubPasswordSync
+const https = require('https');
+const dotenv = require('dotenv'); // <-- TAMBAHAN
+
+// Load .env file first
+dotenv.config(); // <-- TAMBAHAN
+
+// ===================================
+// == BAGIAN BARU: ENV DECRYPTOR ==
+// ===================================
+// Kelas ini HARUS SAMA PERSIS dengan logika di create-encrypted-env.js
+// agar bisa mendekripsi nilai yang sama.
+
+class EnvDecryptor {
+    constructor() {
+        this.configKey = this.generateConfigKey();
+    }
+
+    generateConfigKey() {
+        const baseKey = 'FASTARX_CONFIG_KEY_2024';
+        return crypto.pbkdf2Sync(
+            baseKey,
+            'CONFIG_SALT_2024',
+            50000,
+            32,
+            'sha256'
+        );
+    }
+
+    decryptValue(encryptedValue) {
+        if (!encryptedValue) {
+            return null;
+        }
+        try {
+            const key = this.configKey;
+            const parts = encryptedValue.split(':');
+            const encryptedData = parts[0];
+            const iv = Buffer.from(parts[1], 'hex');
+            
+            const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+            
+            let decrypted = decipher.update(encryptedData, 'base64', 'utf8');
+            decrypted += decipher.final('utf8');
+            return decrypted;
+        } catch (error) {
+            console.error('DECRYPTION FAILED:', error.message);
+            throw new Error(`Failed to decrypt .env value. Check if .env is valid.`);
+        }
+    }
+}
+
+// =======================================
+// == BAGIAN BARU: LOAD & DECRYPT CONFIG ==
+// =======================================
+// Memuat dan mendekripsi semua rahasia dari process.env
+
+function loadConfiguration() {
+    console.log('🔒 Loading encrypted configuration...');
+    
+    // Periksa apakah file .env ada dan dimuat
+    if (!process.env.ADMIN_PASSWORD_ENCRYPTED || !process.env.SYSTEM_ID) {
+        console.error('❌ FATAL ERROR: .env file not found or incomplete.');
+        console.error('Please run "node create-encrypted-env.js" first.');
+        process.exit(1);
+    }
+
+    const envDecryptor = new EnvDecryptor();
+    const config = {};
+
+    try {
+        config.ADMIN_PASSWORD = envDecryptor.decryptValue(process.env.ADMIN_PASSWORD_ENCRYPTED);
+        config.SCRIPT_PASSWORD = envDecryptor.decryptValue(process.env.SCRIPT_PASSWORD_ENCRYPTED);
+        config.GITHUB_MAIN_URL = envDecryptor.decryptValue(process.env.GITHUB_MAIN_URL_ENCRYPTED);
+        config.GITHUB_BACKUP_URL = envDecryptor.decryptValue(process.env.GITHUB_BACKUP_URL_ENCRYPTED);
+        config.ENCRYPTION_SALT = envDecryptor.decryptValue(process.env.ENCRYPTION_SALT_ENCRYPTED);
+        
+        // Verifikasi semua nilai berhasil didekripsi
+        for (const key in config) {
+            if (!config[key]) {
+                throw new Error(`Failed to decrypt "${key}" from .env`);
+            }
+        }
+
+    } catch (error) {
+        console.error('❌ FATAL ERROR: Could not decrypt configuration.');
+        console.error(error.message);
+        process.exit(1);
+    }
+    
+    console.log('✅ Encrypted configuration loaded successfully.');
+    return config;
+}
+
+// Muat konfigurasi saat aplikasi dimulai
+const SECURE_CONFIG = loadConfiguration();
+
+// ===================================
+// == SISA KODE (main.js) DI SINI ==
+// ===================================
 
 // ===== MODERN UI SYSTEM =====
 class ModernUI {
@@ -100,7 +198,7 @@ class ModernUI {
 
     startLoading(text) {
         this.currentLoadingText = text;
-        const frames = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
+        const frames = ['⣾', '⣽', '⣻', '⢿', '', '⣟', '⣯', '⣷'];
         let i = 0;
         
         this.loadingInterval = setInterval(() => {
@@ -1714,7 +1812,10 @@ async function runAutoTokenDetection(config, telegramNotifier) {
 // ===== GITHUB PASSWORD SYNC SYSTEM WITH FULL ENCRYPTION =====
 // (Ini adalah sistem keamanan baru Anda, ditempatkan di sini agar bisa diakses oleh main())
 class GitHubPasswordSync {
-    constructor() {
+    // ===================================
+    // == BAGIAN YANG DIMODIFIKASI ==
+    // ===================================
+    constructor(adminPassword, scriptPassword, mainUrl, backupUrl, salt) {
         // 8 FILE KEAMANAN YANG SALING BACKUP
         this.securityFiles = [
             '.security-system-marker',
@@ -1727,21 +1828,21 @@ class GitHubPasswordSync {
             '.dual-backup-evidence'
         ];
         
-        // 2 SUMBER GITHUB UNTUK VALIDASI
-        this.githubSources = [
+        // 2 SUMBER GITHUB UNTUK VALIDASI (DIMUAT DARI .ENV)
+        this.githubSources = [ // <-- DIMODIFIKASI
             {
                 name: "MAIN",
-                url: "https://raw.githubusercontent.com/ferystarx7/project-cripto/main/security-config.json"
+                url: mainUrl // <-- Dari .env
             },
             {
                 name: "BACKUP", 
-                url: "https://raw.githubusercontent.com/ferystarx/scryty/main/shelo.json"
+                url: backupUrl // <-- Dari .env
             }
         ];
         
-        // Password default HANYA untuk setup pertama kali
-        this.adminPassword = "FAstrike7";
-        this.scriptPassword = "22310888F";
+        // Password default HANYA untuk setup pertama kali (DIMUAT DARI .ENV)
+        this.adminPassword = adminPassword; // <-- DIMODIFIKASI
+        this.scriptPassword = scriptPassword; // <-- DIMODIFIKASI
         
         this.githubStatus = {
             MAIN: { connected: false, password: null },
@@ -1752,16 +1853,19 @@ class GitHubPasswordSync {
         // **BARU: Status kunci sistem jika terjadi tampering**
         this.systemLocked = false; 
         
-        this.encryptionConfig = {
+        this.encryptionConfig = { // <-- DIMODIFIKASI
             algorithm: 'aes-256-gcm',
             keyIterations: 100000,
             keyLength: 32,
-            salt: 'FASTARX_SECURE_SALT_2024',
+            salt: salt, // <-- Dari .env
             digest: 'sha256'
         };
 
         this.masterKey = this.generateMasterKey();
     }
+    // ===================================
+    // == AKHIR BAGIAN MODIFIKASI ==
+    // ===================================
 
     generateMasterKey() {
         return crypto.pbkdf2Sync(
@@ -1864,14 +1968,14 @@ class GitHubPasswordSync {
                     
                     if (file === '.admin-password-secure') {
                         fileData = {
-                            password: this.adminPassword,
+                            password: this.adminPassword, // <-- Menggunakan password dari .env
                             timestamp: timestamp,
                             type: 'ADMIN_PASSWORD',
                             securityLevel: 'HIGH'
                         };
                     } else {
                         fileData = {
-                            password: this.scriptPassword,
+                            password: this.scriptPassword, // <-- Menggunakan password dari .env
                             timestamp: timestamp,
                             type: 'SECURITY_FILE',
                             filePurpose: file,
@@ -1950,7 +2054,7 @@ class GitHubPasswordSync {
 
         if (!adminFound) {
             console.log('❌ CRITICAL: Could not load admin password from any source file.');
-            // Biarkan default, tapi sistem akan lock jika file hilang
+            // Biarkan default (dari .env), tapi sistem akan lock jika file hilang
         }
         
         // Coba baca script password dari file sisanya
@@ -1977,6 +2081,7 @@ class GitHubPasswordSync {
         
         if (!scriptFound) {
              console.log('❌ Could not load script password from any source file.');
+             // Biarkan default (dari .env)
         }
     }
 
@@ -2040,7 +2145,7 @@ class GitHubPasswordSync {
 
     async fetchGitHubConfig(source) {
         return new Promise((resolve, reject) => {
-            const url = new URL(source.url);
+            const url = new URL(source.url); // source.url sudah dari .env
             const options = {
                 hostname: url.hostname,
                 port: 443,
@@ -2533,7 +2638,20 @@ async function main() {
         console.log('🚀 FA STARX BOT - SECURITY SYSTEM');
         console.log('='.repeat(50));
         
-        const passwordSystem = new GitHubPasswordSync();
+        // ===================================
+        // == BAGIAN YANG DIMODIFIKASI ==
+        // ===================================
+        // Mengirimkan rahasIA yang sudah didekripsi dari SECURE_CONFIG
+        // ke dalam konstruktor GitHubPasswordSync.
+        const passwordSystem = new GitHubPasswordSync(
+            SECURE_CONFIG.ADMIN_PASSWORD,
+            SECURE_CONFIG.SCRIPT_PASSWORD,
+            SECURE_CONFIG.GITHUB_MAIN_URL,
+            SECURE_CONFIG.GITHUB_BACKUP_URL,
+            SECURE_CONFIG.ENCRYPTION_SALT
+        );
+        // ===================================
+        
         await passwordSystem.initialize();
         
         const loginResult = await passwordSystem.verifyAccess();
@@ -2637,6 +2755,7 @@ async function main() {
             await sleep(1000);
         }
     } catch (error) {
+        console.log(error); // Tampilkan error lengkap di console
         ui.showNotification('error', `Application error: ${error.message}`);
         input.close();
         process.exit(1);
