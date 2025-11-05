@@ -132,7 +132,7 @@ class ModernUI {
 ║  ██║     ██║  ██║    ███████║   ██║   ██║  ██║██║  ██║██╔╝ ██╗███████║      ║
 ║  ╚═╝     ╚═╝  ╚═╝    ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝      ║
 ║                                                                              ║
-║                   🚀 MULTI-CHAIN TRANSFER BOT v9.2 🚀                       ║
+║                   🚀 MULTI-CHAIN TRANSFER BOT v14 🚀                        ║
 ║                                                                              ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║  🔔 Telegram Enabled  •  🎯 Auto Token Detection  •  👥 Multi-Account       ║
