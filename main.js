@@ -10,11 +10,6 @@ const dotenv = require('dotenv'); // <-- TAMBAHAN
 // Load .env file first
 dotenv.config(); // <-- TAMBAHAN
 
-// ===================================
-// == BAGIAN BARU: ENV DECRYPTOR ==
-// ===================================
-// Kelas ini HARUS SAMA PERSIS dengan logika di create-encrypted-env.js
-// agar bisa mendekripsi nilai yang sama.
 
 class EnvDecryptor {
     constructor() {
