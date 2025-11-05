@@ -11,6 +11,10 @@ sudo apt install git -y
 node --version
 npm --version
 
+#download script dan masuk folder script
+git clone https://github.com/ferystarx123x/auto-transfer-cripto-all-chain-v9.2.0
+cd ferystarx123x/auto-transfer-cripto-all-chain-v9.2.0
+
 # Install tools tambahan di dalam folder
 npm init -y
 npm install ethers@6.15.0
@@ -19,3 +23,6 @@ npm install dotenv
 #password 
 dm aja di https://x.com/ferystarx or 
 telegram : @fazuory77
+
+#start
+npm start or node main.js
