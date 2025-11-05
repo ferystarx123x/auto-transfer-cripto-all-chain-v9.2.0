@@ -1,0 +1,21 @@
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Install Node.js
+sudo apt install -y nodejs npm
+
+# Install git
+sudo apt install git -y
+
+# Verifikasi instalasi
+node --version
+npm --version
+
+# Install tools tambahan di dalam folder
+npm init -y
+npm install ethers@6.15.0
+npm install dotenv
+
+#password 
+dm aja di https://x.com/ferystarx or 
+telegram : @fazuory77
