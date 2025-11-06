@@ -1,223 +1,208 @@
+// ===== NEW DEPENDENCIES =====
 const { ethers } = require('ethers');
 const readline = require('readline');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const https = require('https'); // Diperlukan untuk GitHubPasswordSync
+const https = require('https');
+const dotenv = require('dotenv'); // <-- TAMBAHAN
 
-// ===== MODERN UI SYSTEM (REFACTORED for VIBRANT COLORS) =====
+// Load .env file first
+dotenv.config(); // <-- TAMBAHAN
+
+// ===================================
+// == BAGIAN BARU: ENV DECRYPTOR ==
+// ===================================
+// Kelas ini HARUS SAMA PERSIS dengan logika di create-encrypted-env.js
+// agar bisa mendekripsi nilai yang sama.
+
+class EnvDecryptor {
+    constructor() {
+        this.configKey = this.generateConfigKey();
+    }
+
+    generateConfigKey() {
+        const baseKey = 'FASTARX_CONFIG_KEY_2024';
+        return crypto.pbkdf2Sync(
+            baseKey,
+            'CONFIG_SALT_2024',
+            50000,
+            32,
+            'sha256'
+        );
+    }
+
+    decryptValue(encryptedValue) {
+        if (!encryptedValue) {
+            return null;
+        }
+        try {
+            const key = this.configKey;
+            const parts = encryptedValue.split(':');
+            const encryptedData = parts[0];
+            const iv = Buffer.from(parts[1], 'hex');
+            
+            const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+            
+            let decrypted = decipher.update(encryptedData, 'base64', 'utf8');
+            decrypted += decipher.final('utf8');
+            return decrypted;
+        } catch (error) {
+            console.error('DECRYPTION FAILED:', error.message);
+            throw new Error(`Failed to decrypt .env value. Check if .env is valid.`);
+        }
+    }
+}
+
+// =======================================
+// == BAGIAN BARU: LOAD & DECRYPT CONFIG ==
+// =======================================
+// Memuat dan mendekripsi semua rahasia dari process.env
+
+function loadConfiguration() {
+    console.log('🔒 Loading encrypted configuration...');
+    
+    // Periksa apakah file .env ada dan dimuat
+    if (!process.env.ADMIN_PASSWORD_ENCRYPTED || !process.env.SYSTEM_ID) {
+        console.error('❌ FATAL ERROR: .env file not found or incomplete.');
+        console.error('Please run "node create-encrypted-env.js" first.');
+        process.exit(1);
+    }
+
+    const envDecryptor = new EnvDecryptor();
+    const config = {};
+
+    try {
+        config.ADMIN_PASSWORD = envDecryptor.decryptValue(process.env.ADMIN_PASSWORD_ENCRYPTED);
+        config.SCRIPT_PASSWORD = envDecryptor.decryptValue(process.env.SCRIPT_PASSWORD_ENCRYPTED);
+        config.GITHUB_MAIN_URL = envDecryptor.decryptValue(process.env.GITHUB_MAIN_URL_ENCRYPTED);
+        config.GITHUB_BACKUP_URL = envDecryptor.decryptValue(process.env.GITHUB_BACKUP_URL_ENCRYPTED);
+        config.ENCRYPTION_SALT = envDecryptor.decryptValue(process.env.ENCRYPTION_SALT_ENCRYPTED);
+        
+        // Verifikasi semua nilai berhasil didekripsi
+        for (const key in config) {
+            if (!config[key]) {
+                throw new Error(`Failed to decrypt "${key}" from .env`);
+            }
+        }
+
+    } catch (error) {
+        console.error('❌ FATAL ERROR: Could not decrypt configuration.');
+        console.error(error.message);
+        process.exit(1);
+    }
+    
+    console.log('✅ Encrypted configuration loaded successfully.');
+    return config;
+}
+
+// Muat konfigurasi saat aplikasi dimulai
+const SECURE_CONFIG = loadConfiguration();
+
+// ===================================
+// == SISA KODE (main.js) DI SINI ==
+// ===================================
+
+// ===== MODERN UI SYSTEM =====
 class ModernUI {
     constructor() {
-        // ===== PALET WARNA BARU (CYBERPUNK/VIBRANT) =====
         this.theme = {
-            primary: '\x1b[38;5;51m',   // Biru Cyan Terang (Teks Utama)
-            secondary: '\x1b[38;5;199m', // Magenta Terang (Label/Key)
-            success: '\x1b[38;5;46m',   // Hijau Terang
-            warning: '\x1b[38;5;214m',  // Oranye Terang
-            error: '\x1b[38;5;196m',   // Merah Terang
-            info: '\x1b[38;5;25m',     // Biru Gelap (Untuk Border)
-            accent: '\x1b[38;5;226m',  // Kuning Terang (Highlight)
-            prompt: '\x1b[38;5;254m',  // Putih Cerah (Untuk Value/Input)
-            title_color: '\x1b[38;5;232m', // Hitam (Untuk teks di atas Latar Belakang)
-            reset: '\x1b[0m',
-            bold: '\x1b[1m',
-            dim: '\x1b[2m',
-            reverse: '\x1b[7m'
+            primary: '\x1b[38;5;51m',
+            secondary: '\x1b[38;5;141m',
+            success: '\x1b[38;5;46m',
+            warning: '\x1b[38;5;214m',
+            error: '\x1b[38;5;203m',
+            info: '\x1b[38;5;249m',
+            accent: '\x1b[38;5;213m',
+            reset: '\x1b[0m'
         };
         this.currentLoadingText = '';
         this.loadingInterval = null;
-        
-        // ===== GAYA BOX BARU (DOUBLE LINE) =====
         this.box = {
-            tl: '╔', tr: '╗', bl: '╚', br: '╝',
-            h: '═', v: '║',
-            lt: '╠', rt: '╣', tt: '╦', bt: '╩'
+            tl: '╭', tr: '╮', bl: '╰', br: '╯',
+            h: '─', v: '│', 
+            lt: '├', rt: '┤', tt: '┬', bt: '┴'
         };
-
-        // --- Logika Rata Tengah ---
-        this.fixedWidth = 80; // Lebar box utama
-        this.contentWidth = this.fixedWidth - 4;
-        
-        this.terminalWidth = process.stdout.columns || 80;
-        this.globalPadding = ' '.repeat(Math.floor((this.terminalWidth - this.fixedWidth) / 2));
-        
-        process.stdout.on('resize', () => {
-            this.terminalWidth = process.stdout.columns || 80;
-            this.globalPadding = ' '.repeat(Math.floor((this.terminalWidth - this.fixedWidth) / 2));
-        });
-    }
-
-    /**
-     * Helper untuk mengubah kode warna Foreground (38) menjadi Background (48)
-     */
-    colorToAnsiBg(fgColor) {
-        // \x1b[38;5;226m -> 226
-        try {
-            const code = fgColor.match(/(\d+)m$/)[1];
-            return code;
-        } catch (e) {
-            return '16'; // Fallback ke hitam
-        }
-    }
-
-    _log(line = '') {
-        const lines = String(line).split('\n');
-        lines.forEach(l => console.log(this.globalPadding + l));
-    }
-
-    wrapText(text, maxWidth) {
-        if (typeof text !== 'string') {
-            text = String(text);
-        }
-        const stripAnsi = (str) => str.replace(/\x1b\[[0-9;]*m/g, '');
-        const lines = [];
-        const words = text.split(' ');
-        let currentLine = '';
-
-        for (const word of words) {
-            const wordLength = stripAnsi(word).length;
-            const currentLineLength = stripAnsi(currentLine).length;
-
-            if (currentLineLength + wordLength + 1 <= maxWidth) {
-                currentLine += (currentLine ? ' ' : '') + word;
-            } else {
-                if (currentLine) lines.push(currentLine);
-                currentLine = word;
-            }
-        }
-        if (currentLine) lines.push(currentLine);
-        return lines.length > 0 ? lines : [''];
-    }
-
-    /**
-     * Helper untuk format baris Key-Value (Warna baru)
-     */
-    formatLine(key, value, keyWidth = 15) {
-        // Key sekarang menggunakan 'secondary' (Magenta)
-        const keyText = `  ${this.theme.secondary}${this.theme.bold}${key.padEnd(keyWidth)}:${this.theme.reset}`;
-        
-        const valueLines = this.wrapText(value, this.contentWidth - keyWidth - 4);
-        // Value sekarang menggunakan 'prompt' (Putih Cerah)
-        const firstLine = `${keyText} ${this.theme.prompt}${valueLines[0]}${this.theme.reset}`;
-        
-        if (valueLines.length > 1) {
-            const indent = ' '.repeat(keyWidth + 4);
-            const restLines = valueLines.slice(1).map(line => `${indent}${this.theme.prompt}${line}${this.theme.reset}`);
-            return [firstLine, ...restLines].join('\n');
-        }
-        return firstLine;
     }
 
     showBanner() {
         console.clear();
-        // Banner tetap menggunakan 'accent' (Kuning Terang)
-        const bannerLines = [
-            '╔══════════════════════════════════════════════════════════════════════════════╗',
-            '║                                                                              ║',
-            '║  ███████╗ █████╗     ███████╗████████╗ █████╗ ██████╗ ██╗  ██╗███████╗      ║',
-            '║  ██╔════╝██╔══██╗    ██╔════╝╚══██╔══╝██╔══██╗██╔══██╗╚██╗██╔╝██╔════╝      ║',
-            '║  █████╗  ███████║    ███████╗   ██║   ███████║██████╔╝ ╚███╔╝ ███████╗      ║',
-            '║  ██╔══╝  ██╔══██║    ╚════██║   ██║   ██╔══██║██╔══██╗ ██╔██╗ ╚════██║      ║',
-            '║  ██║     ██║  ██║    ███████║   ██║   ██║  ██║██║  ██║██╔╝ ██╗███████║      ║',
-            '║  ╚═╝     ╚═╝  ╚═╝    ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝      ║',
-            '║                                                                              ║',
-            '║                   🚀 MULTI-CHAIN TRANSFER BOT v15 🚀                        ║',
-            '║                                                                              ║',
-            '╠══════════════════════════════════════════════════════════════════════════════╣',
-            '║  🔔 Telegram Enabled  •  🎯 Auto Token Detection  •  👥 Multi-Account       ║',
-            '╚══════════════════════════════════════════════════════════════════════════════╝'
-        ];
-        
-        const bannerWidth = 82;
-        const bannerPadding = ' '.repeat(Math.floor((this.terminalWidth - bannerWidth) / 2));
-        
-        bannerLines.forEach(line => {
-            console.log(bannerPadding + `${this.theme.accent}${line}${this.theme.reset}`);
-        });
-        this._log();
+        console.log(`${this.theme.accent}
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║  ███████╗ █████╗     ███████╗████████╗ █████╗ ██████╗ ██╗  ██╗███████╗      ║
+║  ██╔════╝██╔══██╗    ██╔════╝╚══██╔══╝██╔══██╗██╔══██╗╚██╗██╔╝██╔════╝      ║
+║  █████╗  ███████║    ███████╗   ██║   ███████║██████╔╝ ╚███╔╝ ███████╗      ║
+║  ██╔══╝  ██╔══██║    ╚════██║   ██║   ██╔══██║██╔══██╗ ██╔██╗ ╚════██║      ║
+║  ██║     ██║  ██║    ███████║   ██║   ██║  ██║██║  ██║██╔╝ ██╗███████║      ║
+║  ╚═╝     ╚═╝  ╚═╝    ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝      ║
+║                                                                              ║
+║                   🚀 MULTI-CHAIN TRANSFER BOT v9.2 🚀                       ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  🔔 Telegram Enabled  •  🎯 Auto Token Detection  •  👥 Multi-Account       ║
+╚══════════════════════════════════════════════════════════════════════════════╝${this.theme.reset}\n`);
     }
 
-    /**
-     * Box baru dengan judul Latar Belakang Solid
-     */
-    createBox(title, content, type = 'accent') { // Default ke 'accent' (Kuning)
+    createBox(title, content, type = 'info') {
         const colors = {
-            primary: this.theme.primary,   // Cyan
-            success: this.theme.success, // Hijau
-            warning: this.theme.warning, // Oranye
-            error: this.theme.error,   // Merah
-            accent: this.theme.accent,   // Kuning
-            info: this.theme.primary   // 'info' sekarang hanya Cyan
+            info: this.theme.primary,
+            success: this.theme.success,
+            warning: this.theme.warning,
+            error: this.theme.error
         };
-        const color = colors[type] || this.theme.accent;
-        const borderColor = this.theme.info; // Border sekarang 'info' (Biru Gelap)
-
-        // --- Render Title Bar (Latar Belakang Solid) ---
-        const titleText = ` ${title.toUpperCase()} `;
-        const titleBgColor = color; // Gunakan warna tipe (Kuning, Hijau, dll)
-        const titleFgColor = this.theme.title_color; // Teks Hitam
+        const color = colors[type] || this.theme.primary;
         
-        // Blok judul berwarna
-        const titleBlock = `${this.theme.bold}\x1b[48;5;${this.colorToAnsiBg(titleBgColor)}m${titleFgColor}${titleText}${this.theme.reset}`;
+        console.log(`${color}${this.box.tl}${this.box.h.repeat(68)}${this.box.tr}${this.theme.reset}`);
+        console.log(`${color}${this.box.v}${this.theme.reset} ${this.theme.accent}${title.padEnd(66)}${this.theme.reset} ${color}${this.box.v}${this.theme.reset}`);
+        console.log(`${color}${this.box.lt}${this.box.h.repeat(68)}${this.box.rt}${this.theme.reset}`);
         
-        // Sisa baris judul
-        const stripAnsi = (str) => str.replace(/\x1b\[[0-9;]*m/g, '');
-        const titleTextLength = stripAnsi(titleText).length;
-        const titlePadding = this.fixedWidth - 4 - titleTextLength;
-        const titleBar = `${titleBlock}${borderColor}${this.box.h.repeat(titlePadding > 0 ? titlePadding : 0)}`;
-
-        this._log(`${borderColor}${this.box.tl}${this.box.h}${titleBar}${this.box.tr}${this.theme.reset}`);
-
-        // --- Render Content with Wrapping ---
-        const contentArray = Array.isArray(content) ? content : content.split('\n');
-        let wrappedContent = [];
-
-        contentArray.forEach(line => {
-            wrappedContent.push(...this.wrapText(line, this.contentWidth));
-        });
-
-        if (wrappedContent.length === 0) wrappedContent.push('');
-
-        wrappedContent.forEach(line => {
-            const visibleLength = stripAnsi(line).length;
-            const padding = ' '.repeat(this.contentWidth - visibleLength);
-            
-            // ===== INI PERUBAHAN UTAMA: "SETIAP KATA ADA WARNA" =====
-            // Semua baris di dalam box sekarang secara default berwarna 'primary' (Cyan)
-            // Warna yang sudah ada di dalam 'line' (misal dari formatLine) akan menimpanya.
-            this._log(`${borderColor}${this.box.v}${this.theme.reset} ${this.theme.primary}${line}${padding}${this.theme.reset} ${borderColor}${this.box.v}${this.theme.reset}`);
-        });
+        if (Array.isArray(content)) {
+            content.forEach(line => {
+                console.log(`${color}${this.box.v}${this.theme.reset} ${line.padEnd(66)} ${color}${this.box.v}${this.theme.reset}`);
+            });
+        } else {
+            const lines = content.split('\n');
+            lines.forEach(line => {
+                console.log(`${color}${this.box.v}${this.theme.reset} ${line.padEnd(66)} ${color}${this.box.v}${this.theme.reset}`);
+            });
+        }
         
-        // --- Render Bottom Border ---
-        this._log(`${borderColor}${this.box.bl}${this.box.h.repeat(this.fixedWidth - 2)}${this.box.br}${this.theme.reset}\n`);
+        console.log(`${color}${this.box.bl}${this.box.h.repeat(68)}${this.box.br}${this.theme.reset}\n`);
     }
 
     showNotification(type, message, title = null) {
         const icons = { 
-            success: '✅', error: '❌', warning: '⚠️', info: 'ℹ️',
-            telegram: '📡', scan: '🔍'
+            success: '✅', 
+            error: '❌', 
+            warning: '⚠️', 
+            info: 'ℹ️',
+            telegram: '📡',
+            scan: '🔍'
         };
         const titles = {
-            success: 'SUCCESS', error: 'ERROR', warning: 'WARNING', 
-            info: 'INFO', telegram: 'TELEGRAM', scan: 'SCAN'
+            success: 'SUCCESS',
+            error: 'ERROR',
+            warning: 'WARNING', 
+            info: 'INFO',
+            telegram: 'TELEGRAM',
+            scan: 'SCAN'
         };
         
         this.stopLoading();
         const notifTitle = title || titles[type];
         const icon = icons[type] || '📢';
         
-        // Pesan (message) akan otomatis diwarnai (Cyan) oleh createBox
         this.createBox(`${icon} ${notifTitle}`, [message], type);
     }
 
     startLoading(text) {
         this.currentLoadingText = text;
-        const frames = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
+        const frames = ['⣾', '⣽', '⣻', '⢿', '', '⣟', '⣯', '⣷'];
         let i = 0;
         
         this.loadingInterval = setInterval(() => {
-            // Spinner sekarang 'secondary' (Magenta), Teks 'primary' (Cyan)
-            process.stdout.write(`\r${this.globalPadding}${this.theme.bold}${this.theme.secondary}${frames[i]}${this.theme.reset} ${this.theme.primary}${text}${this.theme.reset}\x1b[K`);
+            process.stdout.write(`\r${this.theme.secondary}${frames[i]}${this.theme.reset} ${text}`);
             i = (i + 1) % frames.length;
         }, 120);
     }
@@ -234,14 +219,15 @@ class ModernUI {
         this.stopLoading();
         
         const content = [
-            this.formatLine('Token', `${tokenInfo.name} (${tokenInfo.symbol})`),
-            // 'formatLine' otomatis mewarnai 'amount' menjadi putih, tapi kita timpa dengan 'success'
-            this.formatLine('Amount', `${this.theme.success}${amount} ${tokenInfo.symbol}${this.theme.reset}`),
-            this.formatLine('Gas', `${gasCost.gasCostFormatted} ETH (${gasCost.gasCostIDR.toLocaleString('id-ID')} IDR)`),
-        ];
+            `🪙 Token: ${tokenInfo.name} (${tokenInfo.symbol})`,
+            `💰 Amount: ${this.theme.success}${amount} ${tokenInfo.symbol}${this.theme.reset}`,
+            `⛽ Gas: ${gasCost.gasCostFormatted} ETH (${gasCost.gasCostIDR.toLocaleString('id-ID')} IDR)`,
+            network ? `🌐 Network: ${network}` : ''
+        ].filter(line => line.trim());
         
-        if (network) content.push(this.formatLine('Network', network));
-        if (txHash) content.push(this.formatLine('TX', this.maskAddress(txHash)));
+        if (txHash) {
+            content.push(`📄 TX: ${this.maskAddress(txHash)}`);
+        }
         
         this.createBox('🎯 TRANSACTION EXECUTED', content, 'success');
     }
@@ -251,36 +237,36 @@ class ModernUI {
         
         const menuContent = [];
         if (description) {
-            // Deskripsi sekarang akan diwarnai Cyan oleh createBox
             menuContent.push(description, '');
         }
         
         options.forEach((opt, idx) => {
-            // [1] (Kuning Terang), Opsi (Putih Cerah)
-            menuContent.push(`  ${this.theme.accent}[${this.theme.bold}${idx + 1}${this.theme.reset}${this.theme.accent}]${this.theme.reset} ${this.theme.prompt}${opt}${this.theme.reset}`);
+            const number = `${idx + 1}`.padEnd(2);
+            menuContent.push(`${this.theme.accent}${number}${this.theme.reset} ${opt}`);
         });
         
-        // Menu box sekarang berwarna 'primary' (Cyan)
-        this.createBox(`📋 ${title}`, menuContent, 'primary');
+        this.createBox(`📋 ${title}`, menuContent, 'info');
     }
 
     showAccountSummary(config, mode) {
         const modeText = {
-            '1': '🪙 ETH Auto-Forward', '2': '🪙 Token Auto-Forward', 
-            '3': '🪙 Token Transfer Once', '4': '🎯 Auto Token Detection'
+            '1': '🪙 ETH Auto-Forward',
+            '2': '🪙 Token Auto-Forward', 
+            '3': '🪙 Token Transfer Once',
+            '4': '🎯 Auto Token Detection'
         }[mode];
         
         const content = [
-            this.formatLine('Mode', modeText),
-            this.formatLine('Network', config.network),
-            this.formatLine('From', this.maskAddress(config.fromAddress)),
-            this.formatLine('To', this.maskAddress(config.destinationAddress)),
-            this.formatLine('Token', config.tokenAddress ? this.maskAddress(config.tokenAddress) : 'Auto-Detect'),
-            this.formatLine('Min Balance', `${GAS_CONFIG.MIN_ETH_BALANCE} ETH`),
-            this.formatLine('Account Name', config.accountName || 'Unnamed')
+            `🎯 Mode: ${modeText}`,
+            `🌐 Network: ${config.network}`,
+            `📤 From: ${this.maskAddress(config.fromAddress)}`,
+            `📥 To: ${this.maskAddress(config.destinationAddress)}`,
+            config.tokenAddress ? `🪙 Token: ${this.maskAddress(config.tokenAddress)}` : '🪙 Token: Auto-Detect',
+            `💰 Min Balance: ${GAS_CONFIG.MIN_ETH_BALANCE} ETH`,
+            `🏷️  Account Name: ${config.accountName || 'Unnamed'}`
         ];
         
-        this.createBox('👤 ACCOUNT CONFIGURATION', content, 'primary');
+        this.createBox('👤 ACCOUNT CONFIGURATION', content, 'info');
     }
 
     maskAddress(address) {
@@ -293,13 +279,12 @@ class ModernUI {
     }
 
     showProgressBar(percentage, label = 'Processing') {
-        const bars = 30;
+        const bars = 20;
         const filled = Math.round((percentage / 100) * bars);
         const empty = bars - filled;
         const bar = '█'.repeat(filled) + '░'.repeat(empty);
         
-        // Progress bar menggunakan 'primary' (Cyan)
-        process.stdout.write(`\r${this.globalPadding}${this.theme.primary}${label}: [${bar}] ${percentage}%${this.theme.reset}\x1b[K`);
+        process.stdout.write(`\r${this.theme.primary}${label}: [${bar}] ${percentage}%${this.theme.reset}`);
     }
 
     showTokenScanProgress(current, total, network) {
@@ -319,11 +304,9 @@ class ModernUI {
         ];
 
         tokens.forEach((token, index) => {
-            content.push(`${this.theme.bold}${this.theme.success}${index + 1}. ${token.symbol} - ${token.name}${this.theme.reset}`);
-            const keyWidth = 10;
-            // Gunakan formatLine baru yang sudah diwarnai (Magenta + Putih)
-            content.push(this.formatLine('Balance', `${this.theme.accent}${token.balance} ${token.symbol}${this.theme.reset}`, keyWidth));
-            content.push(this.formatLine('Contract', this.maskAddress(token.address), keyWidth));
+            content.push(`${this.theme.success}${index + 1}. ${token.symbol} - ${token.name}${this.theme.reset}`);
+            content.push(`   Balance: ${this.theme.accent}${token.balance} ${token.symbol}${this.theme.reset}`);
+            content.push(`   Contract: ${this.maskAddress(token.address)}`);
             content.push('');
         });
 
@@ -331,22 +314,19 @@ class ModernUI {
     }
 }
 
-// ===== INPUT HANDLER (REFACTORED for CENTERING) =====
+// ===== INPUT HANDLER =====
 class InputHandler {
     constructor() {
         this.rl = readline.createInterface({
             input: process.stdin,
             output: process.stdout
         });
-        this.ui = new ModernUI(); // Diinisialisasi *setelah* class UI
+        this.ui = new ModernUI();
     }
 
     question(prompt) {
         return new Promise((resolve) => {
-            // Prompt sekarang: ❯ (Kuning Terang), Teks (Putih Cerah)
-            const fullPrompt = `\n${this.ui.globalPadding}${this.ui.theme.bold}${this.ui.theme.accent}❯${this.ui.theme.reset} ${this.ui.theme.prompt}${prompt}: ${this.ui.theme.reset}`;
-            
-            this.rl.question(fullPrompt, (answer) => {
+            this.rl.question(`\n${this.ui.theme.secondary}${prompt}${this.ui.theme.reset} `, (answer) => {
                 resolve(answer.trim());
             });
         });
@@ -392,7 +372,7 @@ class AdvancedTokenDetector {
             ],
             'ARBITRUM': [
                 { address: '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8', symbol: 'USDC', name: 'USD Coin' },
-                { address: '0xFd086BC7CD5C481DCC9C85ebE478A1C0b69FCbb9', symbol: 'USDT', name: 'Tether USD' },
+                { address: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9', symbol: 'USDT', name: 'Tether USD' },
                 { address: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1', symbol: 'WETH', name: 'Wrapped Ethereum' },
                 { address: '0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1', symbol: 'DAI', name: 'Dai Stablecoin' },
                 { address: '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f', symbol: 'WBTC', name: 'Wrapped BTC' }
@@ -433,11 +413,13 @@ class AdvancedTokenDetector {
             for (let i = 0; i < networkTokens.length; i++) {
                 const token = networkTokens[i];
                 
+                // Show progress
                 ui.showTokenScanProgress(i + 1, totalTokens, network);
                 
                 try {
                     const tokenContract = new ethers.Contract(token.address, ERC20_ABI, this.provider);
                     
+                    // Check if contract is valid by trying to get symbol
                     const symbol = await tokenContract.symbol();
                     const balance = await tokenContract.balanceOf(this.walletAddress);
                     const decimals = await tokenContract.decimals();
@@ -457,15 +439,14 @@ class AdvancedTokenDetector {
                         tokens.push(tokenInfo);
                         this.detectedTokens.set(token.address, tokenInfo);
                         
-                        ui.stopLoading();
-                        process.stdout.write(`\r${ui.globalPadding}${ui.theme.success}✅ Found: ${balanceFormatted} ${symbol}${ui.theme.reset}\n`);
-                        ui.startLoading(`🔍 Scanning blockchain for tokens on ${network}...`);
-
+                        ui.showNotification('scan', `Found: ${balanceFormatted} ${symbol}`);
                     }
                 } catch (error) {
+                    // Skip invalid tokens
                     continue;
                 }
                 
+                // Small delay to avoid rate limiting
                 await new Promise(resolve => setTimeout(resolve, 100));
             }
 
@@ -481,6 +462,7 @@ class AdvancedTokenDetector {
     async comprehensiveScan(network) {
         ui.startLoading(`🚀 Starting comprehensive token scan on ${network}...`);
         
+        // Method 1: Database tokens
         const databaseTokens = await this.scanForTokens(network);
         
         ui.showNotification('success', `Scan completed: Found ${databaseTokens.length} tokens with balance`);
@@ -499,6 +481,7 @@ class AdvancedTokenDetector {
                 const currentTokens = await this.scanForTokens(network);
                 const currentTokenAddresses = new Set(currentTokens.map(t => t.address));
                 
+                // Check for new tokens
                 for (const token of currentTokens) {
                     if (!previousTokens.has(token.address) && token.balance > 0) {
                         ui.showNotification('success', `🎯 New token detected: ${token.symbol} - ${token.balance} ${token.symbol}`);
@@ -531,6 +514,7 @@ class SimpleGasOptimizer {
     async getOptimalGasPrice() {
         try {
             const feeData = await this.provider.getFeeData();
+            // Use maxFeePerGas for EIP-1559 chains
             return feeData.maxFeePerGas || feeData.gasPrice || ethers.parseUnits("15", "gwei");
         } catch (error) {
             return ethers.parseUnits("15", "gwei");
@@ -552,6 +536,7 @@ class SimpleGasOptimizer {
                 gasCostFormatted: gasCostETH.toFixed(8)
             };
         } catch (error) {
+            // Fallback calculation
             const gasPrice = ethers.parseUnits("15", "gwei");
             const gasCostWei = gasPrice * BigInt(gasLimit);
             const gasCostETH = parseFloat(ethers.formatEther(gasCostWei));
@@ -756,6 +741,7 @@ class TelegramNotifier {
 
     async sendNotification(message) {
         try {
+            // const https = require('https'); // Sudah di-require di atas
             const data = JSON.stringify({ 
                 chat_id: this.chatId,
                 text: message, 
@@ -1047,9 +1033,9 @@ async function selectAccount(mode) {
     const { accounts, password } = loadedData;
     
     const filteredAccounts = accounts.filter(acc => {
-        if (mode === '1') return !acc.tokenAddress; 
-        if (mode === '2' || mode === '3') return !!acc.tokenAddress; 
-        if (mode === '4') return true; 
+        if (mode === '1') return !acc.tokenAddress; // ETH mode = no token address
+        if (mode === '2' || mode === '3') return !!acc.tokenAddress; // Token mode = must have token address
+        if (mode === '4') return true; // Auto-detect mode = works on any account
         return true;
     });
     
@@ -1060,7 +1046,6 @@ async function selectAccount(mode) {
 
     ui.stopLoading();
     
-    // Tampilan menu pilihan akun akan otomatis menggunakan warna baru
     const menuOptions = [
         ...filteredAccounts.map((acc, idx) => {
             const addressPart = ui.maskAddress(acc.fromAddress);
@@ -1068,8 +1053,7 @@ async function selectAccount(mode) {
             const typePart = acc.tokenAddress ? 'Token' : 'ETH';
             const namePart = acc.accountName || 'Unnamed';
             
-            // Format: Nama (Putih) (Alamat (Cyan) • Jaringan (Cyan) • Tipe (Cyan))
-            return `${ui.theme.prompt}${ui.theme.bold}${namePart}${ui.theme.reset} ${ui.theme.primary}(${addressPart} • ${networkPart} • ${typePart})${ui.theme.reset}`;
+            return `${addressPart} • ${networkPart} • ${typePart} • ${namePart}`;
         }),
         '➕ Add New Account Configuration'
     ];
@@ -1116,24 +1100,17 @@ async function viewAccountConfigurations() {
     
     const { accounts } = loadedData;
     
-    if (accounts.length === 0) {
-        ui.showNotification('warning', 'No saved account configurations found');
-        return;
-    }
-
     accounts.forEach((acc, index) => {
-        // 'formatLine' baru (Magenta + Putih) akan digunakan di sini
         const content = [
-            ui.formatLine('Network', acc.network),
-            ui.formatLine('From', ui.maskAddress(acc.fromAddress)),
-            ui.formatLine('To', ui.maskAddress(acc.destinationAddress)),
-            ui.formatLine('Token', acc.tokenAddress ? ui.maskAddress(acc.tokenAddress) : 'Auto-Detect'),
-            ui.formatLine('Account Name', acc.accountName || 'Unnamed'),
-            ui.formatLine('Created', acc.created ? new Date(acc.created).toLocaleString() : 'Unknown')
+            `🌐 Network: ${acc.network}`,
+            `📤 From: ${ui.maskAddress(acc.fromAddress)}`,
+            `📥 To: ${ui.maskAddress(acc.destinationAddress)}`,
+            acc.tokenAddress ? `🪙 Token: ${ui.maskAddress(acc.tokenAddress)}` : '🪙 Token: Auto-Detect',
+            `🏷️  Account Name: ${acc.accountName || 'Unnamed'}`,
+            `📅 Created: ${acc.created ? new Date(acc.created).toLocaleString() : 'Unknown'}`
         ];
         
-        // Box akan berwarna Cyan
-        ui.createBox(`👤 ACCOUNT #${index + 1}: ${acc.accountName || 'Unnamed'}`, content, 'primary');
+        ui.createBox(`👤 ACCOUNT #${index + 1}`, content, 'info');
     });
     
     await input.question('Press Enter to continue...');
@@ -1159,7 +1136,7 @@ async function deleteAccountConfiguration() {
         const typePart = acc.tokenAddress ? 'Token' : 'ETH';
         const namePart = acc.accountName || 'Unnamed';
         
-        return `${ui.theme.prompt}${ui.theme.bold}${namePart}${ui.theme.reset} ${ui.theme.primary}(${addressPart} • ${networkPart} • ${typePart})${ui.theme.reset}`;
+        return `${addressPart} • ${networkPart} • ${typePart} • ${namePart}`;
     });
 
     ui.createMenu('🗑️ DELETE ACCOUNT CONFIGURATION', 
@@ -1238,7 +1215,6 @@ class TokenTransfer {
             
             const gasCost = await this.gasOptimizer.calculateTransactionCost(GAS_CONFIG.GAS_LIMIT);
             
-            // Tampilan ringkasan akan menggunakan UI box hijau baru
             ui.showTransactionSummary(tokenInfo, tokenBalance.formattedBalance, gasCost, null, this.networkName);
 
             const currentNonce = await this.gasOptimizer.getCurrentNonce(this.wallet.address);
@@ -1330,7 +1306,6 @@ class TokenTransfer {
             const tokenBalance = await this.getTokenBalance(tokenAddress);
             
             if (tokenBalance.formattedBalance <= 0) {
-                // Teks loading (Magenta + Cyan)
                 ui.startLoading(`Monitoring ${tokenBalance.symbol} - Balance: 0`);
                 this.lastBalance = 0;
                 this.consecutiveErrors = 0;
@@ -1583,6 +1558,7 @@ class AutoTokenDetectionManager {
             );
         }
 
+        // Initial comprehensive scan
         ui.showNotification('info', '🔍 Performing initial token scan...');
         const initialTokens = await this.tokenDetector.comprehensiveScan(this.networkName);
         
@@ -1590,9 +1566,10 @@ class AutoTokenDetectionManager {
             ui.showTokenScanResults(initialTokens);
             ui.showNotification('success', `🎯 Found ${initialTokens.length} token(s) with balance - Starting transfers...`);
             
+            // Transfer all found tokens
             for (const token of initialTokens) {
                 await this.transferToken(token, toAddress);
-                await sleep(5000); 
+                await sleep(5000); // Delay 5 detik antara transfer
             }
         } else {
             ui.showNotification('info', 'No tokens with balance found in initial scan');
@@ -1600,6 +1577,7 @@ class AutoTokenDetectionManager {
 
         ui.showNotification('success', '🔄 Starting continuous monitoring for new tokens...');
 
+        // Start continuous monitoring
         this.scanInterval = this.tokenDetector.startContinuousScan(
             this.networkName,
             async (newToken) => {
@@ -1616,18 +1594,16 @@ class AutoTokenDetectionManager {
             30000 // Scan every 30 seconds
         );
 
-        // Box status (hijau)
         ui.createBox('🎯 AUTO TOKEN DETECTION ACTIVE', [
-            ui.formatLine('Network', this.networkName),
-            ui.formatLine('From', ui.maskAddress(this.wallet.address)),
-            ui.formatLine('To', ui.maskAddress(toAddress)),
-            ui.formatLine('Tokens', 'Auto-Detect All'),
-            ui.formatLine('Account', accountName || 'Unnamed'),
-            ui.formatLine('Scan Interval', '30 seconds'),
-            ui.formatLine('Monitoring', 'USDC, USDT, WETH, DAI, WBTC, etc'),
-            ui.formatLine('Initial Scan', `${initialTokens.length} tokens found`),
-            '',
-            `${ui.theme.dim}Tekan Ctrl+C untuk berhenti${ui.theme.reset}`
+            `🌐 Network: ${this.networkName}`,
+            `📤 From: ${ui.maskAddress(this.wallet.address)}`,
+            `📥 To: ${ui.maskAddress(toAddress)}`,
+            `🪙 Tokens: Auto-Detect All`,
+            `🏷️  Account: ${accountName || 'Unnamed'}`,
+            `⏰ Scan Interval: 30 seconds`,
+            `🔍 Monitoring: USDC, USDT, WETH, DAI, WBTC, etc`,
+            `📊 Initial Scan: ${initialTokens.length} tokens found`,
+            `⏸️  Press Ctrl+C to stop`
         ], 'success');
     }
 
@@ -1637,6 +1613,7 @@ class AutoTokenDetectionManager {
             
             const tokenContract = new ethers.Contract(token.address, ERC20_ABI, this.wallet);
             
+            // Get current balance to ensure we have the latest
             const currentBalance = await tokenContract.balanceOf(this.wallet.address);
             const currentBalanceFormatted = parseFloat(ethers.formatUnits(currentBalance, token.decimals));
             
@@ -1695,6 +1672,7 @@ class AutoTokenDetectionManager {
             ui.stopLoading();
             ui.showNotification('error', `❌ Failed to transfer ${token.symbol}: ${error.message}`);
             
+            // Clear nonce cache on error
             if (error.message.includes('nonce') || error.message.includes('replacement')) {
                 this.gasOptimizer.clearNonceCache(this.wallet.address);
                 ui.showNotification('warning', '🔄 Nonce cache cleared due to error');
@@ -1722,7 +1700,7 @@ async function setupTelegramNotifier() {
         
         ui.startLoading('Testing Telegram connection...');
         const testResult = await telegramNotifier.sendNotification(
-            '🔔 FA STARXZ BOT v15 ACTIVATED\n\n' +
+            '🔔 FA STARX BOT v9.2 ACTIVATED\n\n' +
             'Auto Token Detection Enabled!\n' +
             'Enhanced Token Scanner Ready!\n\n' +
             '⏰ ' + new Date().toLocaleString()
@@ -1740,6 +1718,7 @@ async function setupTelegramNotifier() {
 }
 
 // ===== MAIN EXECUTION FUNCTIONS =====
+// (Ini adalah fungsi-fungsi yang *berfungsi* dari file asli Anda)
 async function runEthAutoForward(config, telegramNotifier) {
     const network = NETWORK_CONFIG[config.network];
     const ethTransfer = new EthTransfer(network.rpc, config.privateKey, network.chainId, network.name, telegramNotifier);
@@ -1748,17 +1727,14 @@ async function runEthAutoForward(config, telegramNotifier) {
         ethTransfer.startAutoForward(config.destinationAddress, config.accountName);
         
         ui.showNotification('info', `ETH Auto-Forward started. Monitoring balance every ${GAS_CONFIG.CHECK_INTERVAL_MS/1000} seconds`);
-        
-        // Box status (hijau)
         ui.createBox('🔄 ETH AUTO-FORWARD ACTIVE', [
-            ui.formatLine('Network', network.name),
-            ui.formatLine('From', ui.maskAddress(config.fromAddress)),
-            ui.formatLine('To', ui.maskAddress(config.destinationAddress)),
-            ui.formatLine('Min Balance', `${GAS_CONFIG.MIN_ETH_BALANCE} ETH`),
-            ui.formatLine('Account', config.accountName || 'Unnamed'),
-            ui.formatLine('Check Interval', `${GAS_CONFIG.CHECK_INTERVAL_MS/1000}s`),
-            '',
-            `${ui.theme.dim}Tekan Ctrl+C untuk berhenti${ui.theme.reset}`
+            `🌐 Network: ${network.name}`,
+            `📤 From: ${ui.maskAddress(config.fromAddress)}`,
+            `📥 To: ${ui.maskAddress(config.destinationAddress)}`,
+            `💰 Min Balance: ${GAS_CONFIG.MIN_ETH_BALANCE} ETH`,
+            `🏷️  Account: ${config.accountName || 'Unnamed'}`,
+            `⏰ Check Interval: ${GAS_CONFIG.CHECK_INTERVAL_MS/1000}s`,
+            `⏸️  Press Ctrl+C to stop`
         ], 'success');
         
         while (true) {
@@ -1777,17 +1753,14 @@ async function runTokenAutoForward(config, telegramNotifier) {
         tokenTransfer.startAutoForward(config.tokenAddress, config.destinationAddress, config.accountName);
         
         ui.showNotification('info', `Token Auto-Forward started. Monitoring every ${GAS_CONFIG.CHECK_INTERVAL_MS/1000} seconds`);
-        
-        // Box status (hijau)
         ui.createBox('🔄 TOKEN AUTO-FORWARD ACTIVE', [
-            ui.formatLine('Network', network.name),
-            ui.formatLine('From', ui.maskAddress(config.fromAddress)),
-            ui.formatLine('To', ui.maskAddress(config.destinationAddress)),
-            ui.formatLine('Token', ui.maskAddress(config.tokenAddress)),
-            ui.formatLine('Account', config.accountName || 'Unnamed'),
-            ui.formatLine('Check Interval', `${GAS_CONFIG.CHECK_INTERVAL_MS/1000}s`),
-            '',
-            `${ui.theme.dim}Tekan Ctrl+C untuk berhenti${ui.theme.reset}`
+            `🌐 Network: ${network.name}`,
+            `📤 From: ${ui.maskAddress(config.fromAddress)}`,
+            `📥 To: ${ui.maskAddress(config.destinationAddress)}`,
+            `🪙 Token: ${ui.maskAddress(config.tokenAddress)}`,
+            `🏷️  Account: ${config.accountName || 'Unnamed'}`,
+            `⏰ Check Interval: ${GAS_CONFIG.CHECK_INTERVAL_MS/1000}s`,
+            `⏸️  Press Ctrl+C to stop`
         ], 'success');
         
         while (true) {
@@ -1823,8 +1796,10 @@ async function runAutoTokenDetection(config, telegramNotifier) {
     try {
         await detectionManager.startAutoDetection(config.destinationAddress, config.accountName);
         
+        // Keep the process running
         while (true) {
             await sleep(60000);
+            // Show heartbeat every minute
             ui.startLoading('🔄 Auto Token Detection active - Monitoring for new tokens...');
             await sleep(2000);
             ui.stopLoading();
@@ -1835,8 +1810,13 @@ async function runAutoTokenDetection(config, telegramNotifier) {
 }
 
 // ===== GITHUB PASSWORD SYNC SYSTEM WITH FULL ENCRYPTION =====
+// (Ini adalah sistem keamanan baru Anda, ditempatkan di sini agar bisa diakses oleh main())
 class GitHubPasswordSync {
-    constructor() {
+    // ===================================
+    // == BAGIAN YANG DIMODIFIKASI ==
+    // ===================================
+    constructor(adminPassword, scriptPassword, mainUrl, backupUrl, salt) {
+        // 8 FILE KEAMANAN YANG SALING BACKUP
         this.securityFiles = [
             '.security-system-marker',
             '.secure-backup-marker', 
@@ -1848,19 +1828,21 @@ class GitHubPasswordSync {
             '.dual-backup-evidence'
         ];
         
-        this.githubSources = [
+        // 2 SUMBER GITHUB UNTUK VALIDASI (DIMUAT DARI .ENV)
+        this.githubSources = [ // <-- DIMODIFIKASI
             {
                 name: "MAIN",
-                url: "https://raw.githubusercontent.com/ferystarx7/project-cripto/main/security-config.json"
+                url: mainUrl // <-- Dari .env
             },
             {
                 name: "BACKUP", 
-                url: "https://raw.githubusercontent.com/ferystarx/scryty/main/shelo.json"
+                url: backupUrl // <-- Dari .env
             }
         ];
         
-        this.adminPassword = "FAstrike7";
-        this.scriptPassword = "22310888F";
+        // Password default HANYA untuk setup pertama kali (DIMUAT DARI .ENV)
+        this.adminPassword = adminPassword; // <-- DIMODIFIKASI
+        this.scriptPassword = scriptPassword; // <-- DIMODIFIKASI
         
         this.githubStatus = {
             MAIN: { connected: false, password: null },
@@ -1868,18 +1850,22 @@ class GitHubPasswordSync {
         };
         this.consensusAchieved = false;
         
+        // **BARU: Status kunci sistem jika terjadi tampering**
         this.systemLocked = false; 
         
-        this.encryptionConfig = {
+        this.encryptionConfig = { // <-- DIMODIFIKASI
             algorithm: 'aes-256-gcm',
             keyIterations: 100000,
             keyLength: 32,
-            salt: 'FASTARX_SECURE_SALT_2024',
+            salt: salt, // <-- Dari .env
             digest: 'sha256'
         };
 
         this.masterKey = this.generateMasterKey();
     }
+    // ===================================
+    // == AKHIR BAGIAN MODIFIKASI ==
+    // ===================================
 
     generateMasterKey() {
         return crypto.pbkdf2Sync(
@@ -1930,27 +1916,33 @@ class GitHubPasswordSync {
         }
     }
 
+    // **DIUBAH: Logika inisialisasi untuk memeriksa integritas file**
     async initialize() {
-        ui._log('🚀 INITIALIZING SECURITY SYSTEM...');
+        console.log('🚀 INITIALIZING SECURITY SYSTEM...');
         
+        // 1. Periksa Integritas File (Pemeriksaan Tampering)
         const fileStatus = this.checkFileStatus();
         
         if (fileStatus.missing > 0) {
             if (fileStatus.existing === 0) {
+                // KASUS 1: Setup Pertama Kali (Semua file tidak ada)
                 ui.showNotification('info', '📁 No security files found. Running first-time setup...');
                 await this.createSecurityFiles();
                 ui.showNotification('warning', '⚠️ Default passwords created. Please log in and change them.');
             } else {
+                // KASUS 2: Tampering (Sebagian file hilang)
                 ui.showNotification('error', '🚫 TAMPERING DETECTED! Security file(s) missing. System locked.');
                 this.systemLocked = true;
-                return; 
+                return; // Hentikan inisialisasi
             }
         } else {
-            ui._log('✅ Security file integrity check passed.');
+            console.log('✅ Security file integrity check passed.');
         }
         
+        // 2. Baca Password (Sekarang aman untuk dibaca)
         await this.readPasswordsFromFiles();
         
+        // 3. Validasi GitHub
         const validationResult = await this.validateGitHubSources();
         
         if (validationResult.validated) {
@@ -1962,7 +1954,7 @@ class GitHubPasswordSync {
     }
 
     async createSecurityFiles() {
-        ui._log('📁 Creating security files...');
+        console.log('📁 Creating security files...');
         
         let createdCount = 0;
         const timestamp = new Date().toISOString();
@@ -1976,14 +1968,14 @@ class GitHubPasswordSync {
                     
                     if (file === '.admin-password-secure') {
                         fileData = {
-                            password: this.adminPassword,
+                            password: this.adminPassword, // <-- Menggunakan password dari .env
                             timestamp: timestamp,
                             type: 'ADMIN_PASSWORD',
                             securityLevel: 'HIGH'
                         };
                     } else {
                         fileData = {
-                            password: this.scriptPassword,
+                            password: this.scriptPassword, // <-- Menggunakan password dari .env
                             timestamp: timestamp,
                             type: 'SECURITY_FILE',
                             filePurpose: file,
@@ -1991,10 +1983,11 @@ class GitHubPasswordSync {
                         };
                     }
                     
+                    // Buat file cadangan admin password juga
                     if (file === '.secure-backup-marker' || file === '.system-integrity-check') {
                         fileData = {
-                            ...fileData, 
-                            password: this.adminPassword, 
+                            ...fileData, // simpan data asli
+                            password: this.adminPassword, // timpa dengan password admin
                             timestamp: timestamp,
                             type: 'ADMIN_PASSWORD',
                             isBackup: true
@@ -2006,29 +1999,30 @@ class GitHubPasswordSync {
                     const finalData = {
                         ...encryptedData,
                         metadata: {
-                            system: 'FA_STARXZ_BOT',
+                            system: 'FA_STARX_BOT',
                             created: timestamp,
                             version: '1.0'
                         }
                     };
                     
                     fs.writeFileSync(filePath, JSON.stringify(finalData, null, 2));
-                    ui._log(`✅ Created: ${file}`);
+                    console.log(`✅ Created: ${file}`);
                     createdCount++;
                     
                 } catch (error) {
-                    ui._log(`❌ Failed to create ${file}`);
+                    console.log(`❌ Failed to create ${file}`);
                 }
             }
         }
         
         if (createdCount > 0) {
-            ui._log(`🎯 ${createdCount} security files created`);
+            console.log(`🎯 ${createdCount} security files created`);
         }
     }
 
+    // **DIUBAH: Membaca password admin secara redundan dari 3 file**
     async readPasswordsFromFiles() {
-        ui._log('🔑 Reading passwords from security files...');
+        console.log('🔑 Reading passwords from security files...');
         
         const adminFiles = ['.admin-password-secure', '.secure-backup-marker', '.system-integrity-check'];
         const scriptFiles = this.securityFiles.filter(f => !adminFiles.includes(f));
@@ -2036,6 +2030,7 @@ class GitHubPasswordSync {
         let adminFound = false;
         let scriptFound = false;
         
+        // Coba baca password admin dari file utama atau cadangan
         for (const file of adminFiles) {
             const filePath = path.join(__dirname, file);
             if (fs.existsSync(filePath)) {
@@ -2048,19 +2043,21 @@ class GitHubPasswordSync {
                     if (fileData.password && fileData.type === 'ADMIN_PASSWORD') {
                         this.adminPassword = fileData.password;
                         adminFound = true;
-                        ui._log(`🔑 Admin password loaded from: ${file}`);
-                        break; 
+                        console.log(`🔑 Admin password loaded from: ${file}`);
+                        break; // Berhenti jika sudah ketemu
                     }
                 } catch (error) {
-                    ui._log(`⚠️ Failed to read/decrypt ${file}, trying next...`);
+                    console.log(`⚠️ Failed to read/decrypt ${file}, trying next...`);
                 }
             }
         }
 
         if (!adminFound) {
-            ui._log('❌ CRITICAL: Could not load admin password from any source file.');
+            console.log('❌ CRITICAL: Could not load admin password from any source file.');
+            // Biarkan default (dari .env), tapi sistem akan lock jika file hilang
         }
         
+        // Coba baca script password dari file sisanya
         for (const file of scriptFiles) {
             const filePath = path.join(__dirname, file);
             if (fs.existsSync(filePath)) {
@@ -2073,17 +2070,18 @@ class GitHubPasswordSync {
                     if (fileData.password && fileData.type === 'SECURITY_FILE') {
                         this.scriptPassword = fileData.password;
                         scriptFound = true;
-                        ui._log(`🔑 Script password loaded from: ${file}`);
-                        break; 
+                        console.log(`🔑 Script password loaded from: ${file}`);
+                        break; // Berhenti jika sudah ketemu
                     }
                 } catch (error) {
-                    // Lanjut
+                    // Lanjut ke file berikutnya
                 }
             }
         }
         
         if (!scriptFound) {
-             ui._log('❌ Could not load script password from any source file.');
+             console.log('❌ Could not load script password from any source file.');
+             // Biarkan default (dari .env)
         }
     }
 
@@ -2096,11 +2094,6 @@ class GitHubPasswordSync {
                 this.fetchGitHubConfig(this.githubSources[1])
             ]);
             
-            // --- PERBAIKAN ALIGNMENT ---
-            ui.stopLoading(); // Hentikan spinner SEKARANG
-            ui._log('🔍 GitHub validation complete. Results:'); // Baris judul
-            // --- AKHIR PERBAIKAN ---
-
             const validResults = [];
             
             results.forEach((result, index) => {
@@ -2111,19 +2104,20 @@ class GitHubPasswordSync {
                         password: result.value
                     };
                     validResults.push(result.value);
-                    ui._log(`  ✅ ${source.name}: Connected`); // Cetak dengan rapi
+                    console.log(`✅ ${source.name}: Connected`);
                 } else {
                     const source = this.githubSources[index];
                     this.githubStatus[source.name] = {
                         connected: false,
                         password: null
                     };
-                    ui._log(`  ❌ ${source.name}: Offline`); // Cetak dengan rapi
+                    console.log(`❌ ${source.name}: Offline`);
                 }
             });
             
-            // ui.stopLoading(); // Dihapus dari sini
+            ui.stopLoading();
             
+            // Jika kedua GitHub connected dan password sama
             if (validResults.length === 2 && validResults[0] === validResults[1]) {
                 this.consensusAchieved = true;
                 this.scriptPassword = validResults[0];
@@ -2151,14 +2145,14 @@ class GitHubPasswordSync {
 
     async fetchGitHubConfig(source) {
         return new Promise((resolve, reject) => {
-            const url = new URL(source.url);
+            const url = new URL(source.url); // source.url sudah dari .env
             const options = {
                 hostname: url.hostname,
                 port: 443,
                 path: url.pathname,
                 method: 'GET',
                 headers: {
-                    'User-Agent': 'FASTARXZ-BOT/1.0'
+                    'User-Agent': 'FASTARX-BOT/1.0'
                 },
                 timeout: 10000
             };
@@ -2207,12 +2201,13 @@ class GitHubPasswordSync {
     }
 
     async updateSecurityFilesWithGitHubPassword(newPassword) {
-        ui._log('🔄 Updating security files with GitHub password...');
+        console.log('🔄 Updating security files with GitHub password...');
         
         const timestamp = new Date().toISOString();
         const adminFiles = ['.admin-password-secure', '.secure-backup-marker', '.system-integrity-check'];
 
         for (const file of this.securityFiles) {
+            // Jangan timpa file admin password
             if (adminFiles.includes(file)) continue; 
             
             const filePath = path.join(__dirname, file);
@@ -2231,7 +2226,7 @@ class GitHubPasswordSync {
                 const finalData = {
                     ...encryptedData,
                     metadata: {
-                        system: 'FA_STARXZ_BOT',
+                        system: 'FA_STARX_BOT',
                         created: timestamp,
                         githubValidated: true
                     }
@@ -2240,32 +2235,30 @@ class GitHubPasswordSync {
                 fs.writeFileSync(filePath, JSON.stringify(finalData, null, 2));
                 
             } catch (error) {
-                ui._log(`❌ Failed to update ${file}`);
+                console.log(`❌ Failed to update ${file}`);
             }
         }
         
         this.scriptPassword = newPassword;
-        ui._log('✅ Script password files updated with GitHub password');
+        console.log('✅ Script password files updated with GitHub password');
     }
 
     async showLoginOptions() {
-        // Menu login akan berwarna Cyan
         ui.createBox('🔐 SECURE LOGIN', [
-            'FA STARXZ BOT SECURITY SYSTEM',
+            'FA STARX BOT SECURITY SYSTEM',
             '',
-            `${ui.theme.dim}Login Methods:${ui.theme.reset}`,
-            `  ${ui.theme.accent}[1]${ui.theme.reset} ${ui.theme.prompt}Administrator Access${ui.theme.reset}`,
-            `  ${ui.theme.accent}[2]${ui.theme.reset} ${ui.theme.prompt}Script Password Access${ui.theme.reset}`,
+            '🔑 Login Methods:',
+            '1. Administrator Access',
+            '2. Script Password Access',
             '',
             'Select login method:'
-        ], 'primary');
+        ], 'info');
 
-        const choice = await input.question('Select option (1-2)');
+        const choice = await input.question('Select option (1-2): ');
         return choice;
     }
 
     async loginWithAdmin() {
-        // Box login admin (Kuning/Warning)
         ui.createBox('🔐 ADMINISTRATOR LOGIN', [
             'Full System Access',
             '',
@@ -2277,7 +2270,7 @@ class GitHubPasswordSync {
 
         let attempts = 0;
         while (attempts < 3) {
-            const inputPassword = await input.question('🔐 Admin Password');
+            const inputPassword = await input.question('🔐 Admin Password: ');
             
             if (inputPassword === this.adminPassword) {
                 return { success: true, accessLevel: 'admin' };
@@ -2296,21 +2289,20 @@ class GitHubPasswordSync {
     }
 
     async loginWithScript() {
-        // Box login script (Cyan)
         ui.createBox('🔐 SCRIPT LOGIN', [
             'Standard Bot Access',
             '',
-            `${ui.theme.dim}Available Features:${ui.theme.reset}`,
+            '📋 Available Features:',
             '• ETH Auto-Forward',
             '• Token Operations',
             '• Auto Detection',
             '',
             'Enter script password:'
-        ], 'primary');
+        ], 'info');
 
         let attempts = 0;
         while (attempts < 3) {
-            const inputPassword = await input.question('🔐 Script Password');
+            const inputPassword = await input.question('🔐 Script Password: ');
             
             if (inputPassword === this.scriptPassword) {
                 return { success: true, accessLevel: 'script' };
@@ -2328,10 +2320,11 @@ class GitHubPasswordSync {
         return { success: false, accessLevel: 'script' };
     }
 
+    // **DIUBAH: Tambahkan pemeriksaan `systemLocked`**
     async verifyAccess() {
         if (this.systemLocked) {
             ui.showNotification('error', 'System is locked due to file tampering. Exiting.');
-            await sleep(3000); 
+            await sleep(3000); // Beri waktu user untuk membaca
             process.exit(1);
         }
         
@@ -2352,9 +2345,9 @@ class GitHubPasswordSync {
             'Admin Password Update',
             '',
             'Enter current admin password:'
-        ], 'primary');
+        ], 'info');
 
-        const currentPassword = await input.question('🔐 Current Password');
+        const currentPassword = await input.question('🔐 Current Password: ');
         if (currentPassword !== this.adminPassword) {
             ui.showNotification('error', '❌ Current password is incorrect');
             return false;
@@ -2363,14 +2356,14 @@ class GitHubPasswordSync {
         let newPassword, confirmPassword;
         
         while (true) {
-            newPassword = await input.question('🔐 New Admin Password');
+            newPassword = await input.question('🔐 New Admin Password: ');
             
             if (newPassword.length < 6) {
                 ui.showNotification('error', '❌ Password must be at least 6 characters');
                 continue;
             }
             
-            confirmPassword = await input.question('🔐 Confirm New Password');
+            confirmPassword = await input.question('🔐 Confirm New Password: ');
             
             if (newPassword !== confirmPassword) {
                 ui.showNotification('error', '❌ Passwords do not match');
@@ -2387,7 +2380,7 @@ class GitHubPasswordSync {
             'Type "YES" to confirm:'
         ], 'warning');
 
-        const confirm = await input.question('Type "YES" to confirm');
+        const confirm = await input.question('Type "YES" to confirm: ');
         if (confirm !== 'YES') {
             ui.showNotification('info', 'Password change cancelled');
             return false;
@@ -2397,6 +2390,7 @@ class GitHubPasswordSync {
         
         try {
             this.adminPassword = newPassword;
+            // Panggil fungsi save utama, yang juga akan memanggil backup
             await this.saveAdminPassword(newPassword); 
             
             ui.stopLoading();
@@ -2410,6 +2404,7 @@ class GitHubPasswordSync {
         }
     }
 
+    // **DIUBAH: Memperbarui file utama DAN memanggil update backup**
     async saveAdminPassword(newPassword) {
         const adminFile = path.join(__dirname, '.admin-password-secure');
         const timestamp = new Date().toISOString();
@@ -2426,14 +2421,16 @@ class GitHubPasswordSync {
         const fileData = {
             ...encryptedData,
             metadata: {
-                system: 'FA_STARXZ_BOT',
+                system: 'FA_STARX_BOT',
                 created: timestamp,
                 version: '1.0'
             }
         };
         
+        // 1. Simpan file admin utama
         fs.writeFileSync(adminFile, JSON.stringify(fileData, null, 2));
         
+        // 2. Simpan file cadangan
         await this.updateBackupFilesWithAdminPassword(adminData);
     }
 
@@ -2443,56 +2440,62 @@ class GitHubPasswordSync {
             '.system-integrity-check'
         ];
         
-        ui._log('🔄 Updating admin password backup files...');
+        console.log('🔄 Updating admin password backup files...');
         
         for (const file of backupFiles) {
             const filePath = path.join(__dirname, file);
             try {
+                // Ambil data yang ada (jika ada) untuk ditimpa
                 let existingData = {};
                 if (fs.existsSync(filePath)) {
                    try {
                        const content = fs.readFileSync(filePath, 'utf8');
                        const data = JSON.parse(content);
                        existingData = JSON.parse(this.decryptData(data));
-                   } catch (e) { /* abaikan */ }
+                   } catch (e) { /* abaikan jika gagal baca */ }
                 }
 
                 const backupData = {
-                    ...existingData, 
-                    ...adminData,    
+                    ...existingData, // Pertahankan data lama (spt filePurpose)
+                    ...adminData,    // Timpa dengan data admin baru
                     isBackup: true,
                     primaryFile: '.admin-password-secure',
-                    timestamp: new Date().toISOString() 
+                    timestamp: new Date().toISOString() // Selalu perbarui timestamp
                 };
                 
                 const encryptedBackup = this.encryptData(JSON.stringify(backupData));
                 const fileData = {
                     ...encryptedBackup,
                     metadata: {
-                        system: 'FA_STARXZ_BOT_BACKUP',
+                        system: 'FA_STARX_BOT_BACKUP',
                         fileType: 'ADMIN_PASSWORD_BACKUP',
                         created: new Date().toISOString()
                     }
                 };
                 
                 fs.writeFileSync(filePath, JSON.stringify(fileData, null, 2));
-                ui._log(`✅ Admin backup saved to: ${file}`);
+                console.log(`✅ Admin backup saved to: ${file}`);
                 
             } catch (error) {
-                ui._log(`❌ Failed to backup to ${file}: ${error.message}`);
+                console.log(`❌ Failed to backup to ${file}: ${error.message}`);
             }
         }
     }
 
     async showPasswordManagement() {
-        ui.createMenu('🔐 PASSWORD MANAGEMENT', [
-            'Change Admin Password',
-            'GitHub Validation',
-            'Security Status',
-            'Back to Main Menu'
-        ], 'Security System Management');
+        ui.createBox('🔐 PASSWORD MANAGEMENT', [
+            'Security System Management',
+            '',
+            '📋 Options:',
+            '1. Change Admin Password',
+            '2. GitHub Validation',
+            '3. Security Status',
+            '4. Back to Main Menu',
+            '',
+            'Select option:'
+        ], 'info');
 
-        const choice = await input.question('Select option (1-4)');
+        const choice = await input.question('Select option (1-4): ');
         return choice;
     }
 
@@ -2513,18 +2516,24 @@ class GitHubPasswordSync {
     showSecurityStatus() {
         const fileStatus = this.checkFileStatus();
         
-        // Status box (Cyan)
         ui.createBox('🔐 SECURITY STATUS', [
-            ui.formatLine('File Status', `${fileStatus.existing}/${this.securityFiles.length} files found`),
-            ui.formatLine('Integrity', `${fileStatus.missing > 0 ? '❌ FAILED (TAMPERED)' : '✅ OK'}`),
+            'FA STARX BOT SECURITY SYSTEM',
             '',
-            ui.formatLine('Admin Pass', `${this.hashDisplay(this.adminPassword)}`),
-            ui.formatLine('Script Pass', `${this.hashDisplay(this.scriptPassword)}`),
+            '📊 File Status:',
+            `Total Files: ${this.securityFiles.length}`,
+            `Existing: ${fileStatus.existing}`,
+            `Missing: ${fileStatus.missing}`,
+            `Integrity: ${fileStatus.missing > 0 ? '❌ FAILED (TAMPERED)' : '✅ OK'}`,
             '',
-            ui.formatLine('GitHub MAIN', `${this.githubStatus.MAIN.connected ? '✅ Connected' : '❌ Offline'}`),
-            ui.formatLine('GitHub BACKUP', `${this.githubStatus.BACKUP.connected ? '✅ Connected' : '❌ Offline'}`),
-            ui.formatLine('Validated', `${this.consensusAchieved ? '✅ Yes' : '❌ No'}`)
-        ], 'primary');
+            '🔑 Password Status:',
+            `Admin: ${this.hashDisplay(this.adminPassword)}`,
+            `Script: ${this.hashDisplay(this.scriptPassword)}`,
+            '',
+            '🌐 GitHub Status:',
+            `MAIN: ${this.githubStatus.MAIN.connected ? '✅' : '❌'}`,
+            `BACKUP: ${this.githubStatus.BACKUP.connected ? '✅' : '❌'}`,
+            `Validated: ${this.consensusAchieved ? '✅' : '❌'}`
+        ], 'info');
     }
 
     checkFileStatus() {
@@ -2549,21 +2558,22 @@ class GitHubPasswordSync {
 }
 
 // ===== PASSWORD MANAGEMENT HANDLER =====
+// (Fungsi helper dari sistem keamanan baru Anda)
 async function handlePasswordManagement(passwordSystem) {
     while (true) {
         const choice = await passwordSystem.showPasswordManagement();
         
         switch (choice) {
-            case '1': 
+            case '1': // Change Admin Password
                 await passwordSystem.changeAdminPassword();
                 break;
-            case '2': 
+            case '2': // GitHub Validation
                 await passwordSystem.manualGitHubValidation();
                 break;
-            case '3': 
+            case '3': // Security Status
                 passwordSystem.showSecurityStatus();
                 break;
-            case '4': 
+            case '4': // Back to Main Menu
                 return;
             default:
                 ui.showNotification('error', 'Invalid selection');
@@ -2574,33 +2584,34 @@ async function handlePasswordManagement(passwordSystem) {
 }
 
 // ===== COMBINED MAIN MENU =====
+// (Menu baru yang menggabungkan fitur bot & fitur keamanan)
 async function showMainMenu(accessLevel) {
     const isAdmin = accessLevel === 'admin';
     
     const menuItems = [
-        '🪙 ETH Auto-Forward', 
-        '🪙 Token Auto-Forward', 
-        '🪙 Token Transfer Once', 
-        '🎯 Auto Token Detection', 
-        '👥 Manage Accounts', 
-        '🗑️  Delete Account' 
+        '🪙 ETH Auto-Forward', // 1
+        '🪙 Token Auto-Forward', // 2
+        '🪙 Token Transfer Once', // 3
+        '🎯 Auto Token Detection', // 4
+        '👥 Manage Accounts', // 5
+        '🗑️  Delete Account' // 6
     ];
 
     if (isAdmin) {
-        menuItems.push('🔐 Security Status'); 
-        menuItems.push('🔑 Password Management'); 
+        menuItems.push('🔐 Security Status'); // 7
+        menuItems.push('🔑 Password Management'); // 8
     }
     
-    menuItems.push('❌ Exit Application'); 
+    menuItems.push('❌ Exit Application'); // 9 (atau 7 untuk user)
     
     const lastItem = menuItems.length;
 
-    // Menu utama sekarang menggunakan 'accent' (Kuning)
-    ui.createMenu(`🎯 MAIN MENU - FA STARXZ BOT v15`, menuItems, 
+    ui.createMenu('🎯 MAIN MENU - FA STARX BOT v9.2', menuItems, 
         `Select an operation mode: | Access: ${isAdmin ? 'ADMIN' : 'USER'}`);
 
-    const choice = await input.question(`Select option (1-${lastItem})`);
+    const choice = await input.question(`Select option (1-${lastItem}): `);
     
+    // Map pilihan ke string yang konsisten
     const choiceNum = parseInt(choice);
     if (choiceNum === lastItem) return 'exit';
     
@@ -2610,22 +2621,37 @@ async function showMainMenu(accessLevel) {
     }
     
     if (choiceNum >= 1 && choiceNum <= 6) {
-        return choice; 
+        return choice; // Mengembalikan '1', '2', '3', '4', '5', '6'
     }
 
-    return 'invalid'; 
+    return 'invalid'; // Pilihan tidak valid
 }
 
 
 // ===== MAIN APPLICATION LOOP (COMBINED) =====
+// (Fungsi main() baru yang menggabungkan keamanan DAN fungsionalitas)
 async function main() {
     try {
         ui.showBanner();
         
-        ui._log('🚀 FA STARXZ BOT - SECURITY SYSTEM');
-        ui._log('='.repeat(ui.fixedWidth));
+        // ===== BAGIAN KEAMANAN BARU =====
+        console.log('🚀 FA STARX BOT - SECURITY SYSTEM');
+        console.log('='.repeat(50));
         
-        const passwordSystem = new GitHubPasswordSync();
+        // ===================================
+        // == BAGIAN YANG DIMODIFIKASI ==
+        // ===================================
+        // Mengirimkan rahasIA yang sudah didekripsi dari SECURE_CONFIG
+        // ke dalam konstruktor GitHubPasswordSync.
+        const passwordSystem = new GitHubPasswordSync(
+            SECURE_CONFIG.ADMIN_PASSWORD,
+            SECURE_CONFIG.SCRIPT_PASSWORD,
+            SECURE_CONFIG.GITHUB_MAIN_URL,
+            SECURE_CONFIG.GITHUB_BACKUP_URL,
+            SECURE_CONFIG.ENCRYPTION_SALT
+        );
+        // ===================================
+        
         await passwordSystem.initialize();
         
         const loginResult = await passwordSystem.verifyAccess();
@@ -2639,7 +2665,7 @@ async function main() {
             ui.createBox('🎉 WELCOME ADMINISTRATOR', [
                 'Full System Access Granted',
                 '',
-                `${ui.theme.dim}Available Features:${ui.theme.reset}`,
+                '🔓 Available Features:',
                 '• All Bot Operations',
                 '• Password Management',
                 '• Security Settings',
@@ -2650,75 +2676,75 @@ async function main() {
             ui.createBox('🎉 WELCOME USER', [
                 'Script Access Granted',
                 '',
-                `${ui.theme.dim}Available Operations:${ui.theme.reset}`,
+                '📋 Available Operations:',
                 '• ETH Auto-Forward',
                 '• Token Auto-Forward',
                 '• Token Transfer',
                 '• Auto Detection',
                 '',
                 '🔒 Secure system active'
-            ], 'primary'); // Box selamat datang user (Cyan)
+            ], 'info');
         }
         
         await input.question('Press Enter to continue...');
-
         const userAccessLevel = loginResult.accessLevel;
+        // ===== AKHIR BAGIAN KEAMANAN =====
 
+        // ===== BAGIAN BOT ASLI (FUNGSIONAL) =====
         const telegramNotifier = await setupTelegramNotifier();
         
         while (true) {
-            ui.showBanner(); 
             const choice = await showMainMenu(userAccessLevel);
             
             switch (choice) {
-                case '1': 
+                case '1': // ETH Auto-Forward
                     const ethConfig = await selectAccount('1');
                     if (ethConfig) {
                         await runEthAutoForward(ethConfig, telegramNotifier);
                     }
                     break;
                     
-                case '2': 
+                case '2': // Token Auto-Forward
                     const tokenConfig = await selectAccount('2');
                     if (tokenConfig) {
                         await runTokenAutoForward(tokenConfig, telegramNotifier);
                     }
                     break;
                     
-                case '3': 
+                case '3': // Token Transfer Once
                     const transferConfig = await selectAccount('3');
                     if (transferConfig) {
                         await runTokenTransferOnce(transferConfig, telegramNotifier);
-                        await input.question('Press Enter to return to menu...');
                     }
                     break;
                     
-                case '4': 
+                case '4': // AUTO TOKEN DETECTION
                     const autoConfig = await selectAccount('4');
                     if (autoConfig) {
                         await runAutoTokenDetection(autoConfig, telegramNotifier);
                     }
                     break;
                     
-                case '5': 
+                case '5': // View Accounts
                     await viewAccountConfigurations();
                     break;
                     
-                case '6': 
+                case '6': // Delete Account
                     await deleteAccountConfiguration();
                     break;
 
-                case 'status': 
+                // --- Kasus baru untuk Keamanan ---
+                case 'status': // Hanya Admin
                     passwordSystem.showSecurityStatus();
                     await input.question('Press Enter...');
                     break;
                     
-                case 'mgmt': 
+                case 'mgmt': // Hanya Admin
                     await handlePasswordManagement(passwordSystem);
                     break;
                     
-                case 'exit': 
-                    ui.showNotification('info', 'Thank you for using FA STARXZ BOT v15!');
+                case 'exit': // Keluar
+                    ui.showNotification('info', 'Thank you for using FA STARX BOT v9.2!');
                     input.close();
                     process.exit(0);
                     
@@ -2729,18 +2755,19 @@ async function main() {
             await sleep(1000);
         }
     } catch (error) {
+        console.log(error); // Tampilkan error lengkap di console
         ui.showNotification('error', `Application error: ${error.message}`);
         input.close();
         process.exit(1);
     }
 }
 
+// Handle graceful shutdown
 process.on('SIGINT', () => {
-    ui.stopLoading(); 
-    console.log('\n'); 
     ui.showNotification('info', 'Bot stopped by user');
     input.close();
     process.exit(0);
 });
 
+// Start the application
 main();
